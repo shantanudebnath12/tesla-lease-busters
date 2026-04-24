@@ -1,12 +1,12 @@
 import asyncio
 import logging
+import os
 import random
 import re
 from datetime import datetime, timezone
 from math import ceil
 from urllib.parse import urljoin
 
-import httpx
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 
@@ -22,11 +22,23 @@ BASE_SEARCH_URL = (
 )
 BASE_URL = "https://www.leasebusters.com"
 
+# Explicit path used when Playwright's auto-detected browser path doesn't exist.
+# Override with CHROMIUM_PATH env var on Railway.
+_CHROMIUM_PATH = os.environ.get("CHROMIUM_PATH", "/opt/pw-browsers/chromium-1194/chrome-linux/chrome")
 
-async def _fetch_page(client: httpx.AsyncClient, url: str) -> str:
-    resp = await client.get(url, timeout=30)
-    resp.raise_for_status()
-    return resp.text
+
+def _browser_kwargs() -> dict:
+    kwargs: dict = {
+        "headless": True,
+        "args": [
+            "--disable-quic",
+            "--disable-features=EncryptedClientHello",
+            "--ignore-certificate-errors",
+        ],
+    }
+    if os.path.exists(_CHROMIUM_PATH):
+        kwargs["executable_path"] = _CHROMIUM_PATH
+    return kwargs
 
 
 def _extract_links(html: str) -> set[str]:
@@ -51,30 +63,43 @@ def _parse_total_count(html: str) -> int:
 
 
 async def discover_listing_urls() -> list[str]:
-    """Phase 1: discover all /details/ URLs via async httpx pagination."""
-    async with httpx.AsyncClient(follow_redirects=True) as client:
-        first_page_html = await _fetch_page(client, BASE_SEARCH_URL + "1")
-        total = _parse_total_count(first_page_html)
+    """Phase 1: discover all /details/ URLs using Playwright to bypass bot protection."""
+    all_links: set[str] = set()
+
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(**_browser_kwargs())
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        )
+        page = await context.new_page()
+
+        # Fetch page 1 to get total count
+        await page.goto(BASE_SEARCH_URL + "1", wait_until="domcontentloaded", timeout=30000)
+        await page.wait_for_load_state("networkidle", timeout=15000)
+        first_html = await page.content()
+        total = _parse_total_count(first_html)
+        all_links |= _extract_links(first_html)
+
         if total == 0:
-            logger.warning("No listings found — returning empty list")
-            return list(_extract_links(first_page_html))
+            logger.warning("No listings found — returning whatever links were on page 1")
+            await browser.close()
+            return list(all_links)
 
         total_pages = ceil(total / 10)
         logger.info("Found %d listings across %d pages", total, total_pages)
 
-        # Fetch remaining pages in parallel (page 1 already fetched)
-        tasks = [
-            _fetch_page(client, BASE_SEARCH_URL + str(page))
-            for page in range(2, total_pages + 1)
-        ]
-        pages_html = await asyncio.gather(*tasks, return_exceptions=True)
+        for page_num in range(2, total_pages + 1):
+            try:
+                await page.goto(BASE_SEARCH_URL + str(page_num), wait_until="domcontentloaded", timeout=30000)
+                await page.wait_for_load_state("networkidle", timeout=15000)
+                html = await page.content()
+                all_links |= _extract_links(html)
+            except Exception as e:
+                logger.warning("Failed to fetch search page %d: %s", page_num, e)
+            await asyncio.sleep(random.uniform(0.5, 1.5))
 
-    all_links = _extract_links(first_page_html)
-    for result in pages_html:
-        if isinstance(result, Exception):
-            logger.warning("Failed to fetch a search page: %s", result)
-            continue
-        all_links |= _extract_links(result)
+        await browser.close()
 
     logger.info("Discovered %d unique listing URLs", len(all_links))
     return list(all_links)
@@ -207,10 +232,10 @@ async def scrape_listing_details(urls: list[str], existing_ids: set[str]) -> lis
 
     results = []
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True)
+        browser = await pw.chromium.launch(**_browser_kwargs())
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         )
         page = await context.new_page()
 
