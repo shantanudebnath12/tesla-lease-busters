@@ -142,8 +142,12 @@ def _detect_model(title: str) -> str:
     return "Unknown"
 
 
+_debug_dumped = False
+
+
 async def _scrape_listing(page, url: str) -> dict | None:
     """Scrape a single listing detail page using an existing Playwright page object."""
+    global _debug_dumped
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=30000)
         await page.wait_for_load_state("networkidle", timeout=15000)
@@ -152,6 +156,11 @@ async def _scrape_listing(page, url: str) -> dict | None:
         return None
 
     content = await page.content()
+
+    if not _debug_dumped:
+        _debug_dumped = True
+        logger.info("DEBUG HTML DUMP for %s:\n%s", url, content[:5000])
+
     soup = BeautifulSoup(content, "html.parser")
 
     # Check for expired/taken listings
