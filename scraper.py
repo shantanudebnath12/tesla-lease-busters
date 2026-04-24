@@ -159,7 +159,12 @@ async def _scrape_listing(page, url: str) -> dict | None:
 
     if not _debug_dumped:
         _debug_dumped = True
-        logger.info("DEBUG HTML DUMP for %s:\n%s", url, content[:5000])
+        soup_d = BeautifulSoup(content, "html.parser")
+        body = soup_d.body
+        h1s = [t.get_text(strip=True) for t in soup_d.find_all("h1")]
+        dts = [(t.get_text(strip=True), t.find_next_sibling().get_text(strip=True) if t.find_next_sibling() else "") for t in soup_d.find_all("dt")]
+        body_text = body.get_text(" ", strip=True)[:3000] if body else content[:3000]
+        logger.info("DEBUG for %s | h1=%s | dt/dd=%s | body_text=%s", url, h1s, dts[:20], body_text)
 
     soup = BeautifulSoup(content, "html.parser")
 
