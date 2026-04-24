@@ -82,6 +82,10 @@ async def discover_listing_urls() -> list[str]:
         all_links |= _extract_links(first_html)
 
         if total == 0:
+            soup = BeautifulSoup(first_html, "html.parser")
+            page_text = soup.get_text(" ", strip=True)
+            logger.warning("Page title: %s", soup.title.string if soup.title else "none")
+            logger.warning("Page text (first 500 chars): %s", page_text[:500])
             logger.warning("No listings found — returning whatever links were on page 1")
             await browser.close()
             return list(all_links)
