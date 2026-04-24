@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 from datetime import datetime, timezone
@@ -26,8 +27,12 @@ _SCOPES = [
 
 
 def _get_client() -> gspread.Client:
-    creds_path = os.environ["GOOGLE_CREDENTIALS_JSON"]
-    creds = Credentials.from_service_account_file(creds_path, scopes=_SCOPES)
+    raw = os.environ["GOOGLE_CREDENTIALS_JSON"]
+    try:
+        info = json.loads(raw)
+        creds = Credentials.from_service_account_info(info, scopes=_SCOPES)
+    except json.JSONDecodeError:
+        creds = Credentials.from_service_account_file(raw, scopes=_SCOPES)
     return gspread.authorize(creds)
 
 
