@@ -1,0 +1,6 @@
+.env
+credentials.json
+*.json
+__pycache__/
+*.pyc
+.playwright/
