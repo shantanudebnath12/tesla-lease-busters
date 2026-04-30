@@ -77,18 +77,19 @@ def _parse_total_count(html: str) -> int:
     return 0
 
 
-async def _wait_past_cloudflare(page, timeout: int = 45000) -> None:
-    """Wait until Cloudflare's interstitial is gone and real content is loaded."""
-    try:
-        await page.wait_for_function(
-            "() => !document.title.includes('Just a moment')",
-            timeout=timeout,
-        )
-        # After the title changes the post-challenge redirect/reload is still in flight;
-        # give it a moment before we read content.
-        await asyncio.sleep(3)
-    except Exception:
-        pass
+async def _wait_past_cloudflare(page, timeout: int = 60000) -> None:
+    """Poll until Cloudflare's interstitial is gone, then wait for the redirect to settle."""
+    import time
+    deadline = time.monotonic() + timeout / 1000
+    while time.monotonic() < deadline:
+        try:
+            title = await page.title()
+        except Exception:
+            break
+        if "just a moment" not in title.lower():
+            await asyncio.sleep(3)  # let post-challenge redirect/reload settle
+            break
+        await asyncio.sleep(2)
     try:
         await page.wait_for_load_state("networkidle", timeout=20000)
     except Exception:
@@ -108,19 +109,27 @@ async def discover_listing_urls() -> list[str]:
         await context.add_init_script(_STEALTH_JS)
         page = await context.new_page()
 
-        # Fetch page 1 to get total count
-        await page.goto(BASE_SEARCH_URL + "1", wait_until="domcontentloaded", timeout=60000)
-        await _wait_past_cloudflare(page)
-        first_html = await page.content()
-        total = _parse_total_count(first_html)
-        all_links |= _extract_links(first_html)
+        # Fetch page 1 — retry up to 3 times if Cloudflare blocks us
+        total = 0
+        first_html = ""
+        for attempt in range(1, 4):
+            await page.goto(BASE_SEARCH_URL + "1", wait_until="domcontentloaded", timeout=60000)
+            await _wait_past_cloudflare(page)
+            first_html = await page.content()
+            total = _parse_total_count(first_html)
+            all_links |= _extract_links(first_html)
+            if total > 0:
+                break
+            if attempt < 3:
+                logger.warning("Cloudflare still active (attempt %d/3), waiting 45s before retry", attempt)
+                await asyncio.sleep(45)
 
         if total == 0:
             soup = BeautifulSoup(first_html, "html.parser")
             page_text = soup.get_text(" ", strip=True)
             logger.warning("Page title: %s", soup.title.string if soup.title else "none")
             logger.warning("Page text (first 500 chars): %s", page_text[:500])
-            logger.warning("No listings found — returning whatever links were on page 1")
+            logger.warning("All 3 attempts blocked by Cloudflare — returning whatever links were found")
             await browser.close()
             return list(all_links)
 
