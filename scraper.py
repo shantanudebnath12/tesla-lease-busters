@@ -209,7 +209,7 @@ async def _scrape_listing(page, url: str) -> dict | None:
     page_text = soup.get_text(" ", strip=True)
 
     # Skip expired/taken listings
-    if any(p in page_text.lower() for p in ["this listing has been taken", "listing expired", "no longer available"]):
+    if any(p in page_text.lower() for p in ["this listing has been taken", "listing expired", "no longer available", "this vehicle has been sold or transferred"]):
         logger.info("Skipping expired/taken listing: %s", url)
         return None
 
