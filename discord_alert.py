@@ -11,21 +11,36 @@ ALERT_SCORE_THRESHOLD = 7.5
 def _build_message(listing: dict) -> str:
     score = listing.get("score", "?")
     title = listing.get("title", "Unknown")
-    payment = listing.get("monthly_payment")
+    effective = listing.get("effective_payment")
+    with_tax = listing.get("monthly_payment_with_tax")
+    base = listing.get("monthly_payment")
     months = listing.get("months_remaining")
     location = listing.get("location", "Unknown")
     cash = listing.get("takeover_cash") or 0
     url = listing.get("url", "")
     reason = listing.get("score_reason", "")
 
-    payment_str = f"${payment:,.0f}/mo" if payment else "Unknown"
+    # Primary: effective payment (incentive baked in); secondary: with-tax; tertiary: base
+    if effective:
+        payment_line = f"**${effective:,.0f}/mo effective**"
+        if with_tax:
+            payment_line += f" · ${with_tax:,.0f}/mo with taxes"
+        elif base:
+            payment_line += f" · ${base:,.0f}/mo before taxes"
+    elif with_tax:
+        payment_line = f"**${with_tax:,.0f}/mo** (incl. taxes)"
+    elif base:
+        payment_line = f"${base:,.0f}/mo (before taxes)"
+    else:
+        payment_line = "Payment unknown"
+
     months_str = f"{months} months remaining" if months else "Unknown term"
-    cash_line = f"\n\U0001f381 ${cash:,.0f} takeover cash" if cash else ""
+    cash_line = f"\n\U0001f381 ${cash:,.0f} cash incentive" if cash else ""
 
     return (
         f"\U0001f697 **New Tesla Lease Deal** — Score: {score}/10\n\n"
         f"**{title}**\n"
-        f"\U0001f4b0 {payment_str} | {months_str}\n"
+        f"\U0001f4b0 {payment_line} | {months_str}\n"
         f"\U0001f4cd {location}"
         f"{cash_line}\n"
         f"\U0001f517 {url}\n\n"

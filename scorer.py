@@ -69,11 +69,13 @@ def _km_used_score(km_used: int | None, km_allowance: int | None) -> float:
 
 
 def score_listing(listing: dict) -> ScoreResult:
-    payment = listing.get("monthly_payment")
+    # Prefer effective_payment (incentive-adjusted) over raw monthly_payment for scoring
+    payment = listing.get("effective_payment") or listing.get("monthly_payment")
     months = listing.get("months_remaining")
     km_allowance = listing.get("km_allowance")
     km_used = listing.get("km_used")
     takeover_cash = listing.get("takeover_cash") or 0.0
+    using_effective = listing.get("effective_payment") is not None
 
     s_payment = _payment_score(payment)
     s_months = _months_score(months)
@@ -94,7 +96,8 @@ def score_listing(listing: dict) -> ScoreResult:
     reasons = []
     if payment is not None:
         label = "Low payment" if payment <= _PAYMENT_GREAT else "High payment"
-        reasons.append(f"{label} (${payment:,.0f}/mo)")
+        suffix = " eff." if using_effective else ""
+        reasons.append(f"{label} (${payment:,.0f}/mo{suffix})")
     if months is not None:
         if _MONTHS_SWEET_LOW <= months <= _MONTHS_SWEET_HIGH:
             reasons.append(f"Good term ({months} mo remaining)")

@@ -13,7 +13,8 @@ TAB_LISTINGS = "listings"
 TAB_RUN_LOG = "run_log"
 
 LISTINGS_COLUMNS = [
-    "listing_id", "title", "model", "year", "monthly_payment",
+    "listing_id", "title", "model", "year",
+    "monthly_payment", "monthly_payment_with_tax", "effective_payment",
     "months_remaining", "km_allowance", "km_used", "msrp", "takeover_cash",
     "location", "url", "score", "score_reason", "scraped_at", "alerted",
 ]
@@ -39,6 +40,11 @@ def _get_client() -> gspread.Client:
 def _ensure_tab(spreadsheet: gspread.Spreadsheet, title: str, headers: list[str]) -> gspread.Worksheet:
     try:
         ws = spreadsheet.worksheet(title)
+        # Sync header row whenever columns change
+        if ws.row_values(1) != headers:
+            ws.resize(cols=len(headers))
+            ws.update("1:1", [headers])
+            logger.info("Updated header row for tab '%s'", title)
     except gspread.WorksheetNotFound:
         ws = spreadsheet.add_worksheet(title=title, rows=1000, cols=len(headers))
         ws.append_row(headers)

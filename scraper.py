@@ -250,11 +250,19 @@ async def _scrape_listing(page, url: str) -> dict | None:
     def rx(pattern: str) -> re.Match | None:
         return re.search(pattern, page_text, re.IGNORECASE)
 
-    # Monthly payment before taxes (Leasebusters shows both before and after)
+    # Monthly payment before taxes
     m = rx(r"Monthly\s+Payment\s*\(before\s+taxes\)\s*\$?\s*([\d,]+(?:\.\d{2})?)")
     if not m:
         m = rx(r"Monthly\s+Payment[^$\d\n]{0,30}\$?\s*([\d,]+(?:\.\d{2})?)")
     monthly_payment = _parse_float(m.group(1)) if m else None
+
+    # Monthly payment including taxes — the actual out-of-pocket amount
+    m = rx(r"Monthly\s+Payment\s*\(including\s+taxes\)\s*\$?\s*([\d,]+(?:\.\d{2})?)")
+    monthly_payment_with_tax = _parse_float(m.group(1)) if m else None
+
+    # Effective payment — cash incentive already amortized in (shown at top of listing)
+    m = rx(r"Effective\s+Payment[:\s]*\$?\s*([\d,]+(?:\.\d{2})?)")
+    effective_payment = _parse_float(m.group(1)) if m else None
 
     # Months remaining: calculated from "Lease Expiry Date 2027-May-07"
     months_remaining = None
@@ -293,8 +301,8 @@ async def _scrape_listing(page, url: str) -> dict | None:
     location = m.group(1).strip() if m else None
 
     logger.info(
-        "Parsed %s | payment=%s | months=%s | km_allow=%s | km_used=%s | location=%s",
-        listing_id, monthly_payment, months_remaining, km_allowance, km_used, location,
+        "Parsed %s | effective=%s | with_tax=%s | payment=%s | months=%s | km_allow=%s | km_used=%s",
+        listing_id, effective_payment, monthly_payment_with_tax, monthly_payment, months_remaining, km_allowance, km_used,
     )
 
     return {
@@ -303,6 +311,8 @@ async def _scrape_listing(page, url: str) -> dict | None:
         "model": model,
         "year": year,
         "monthly_payment": monthly_payment,
+        "monthly_payment_with_tax": monthly_payment_with_tax,
+        "effective_payment": effective_payment,
         "months_remaining": months_remaining,
         "km_allowance": km_allowance,
         "km_used": km_used,
