@@ -77,16 +77,22 @@ def _parse_total_count(html: str) -> int:
     return 0
 
 
-async def _wait_past_cloudflare(page, timeout: int = 20000) -> None:
+async def _wait_past_cloudflare(page, timeout: int = 45000) -> None:
     """Wait until Cloudflare's interstitial is gone and real content is loaded."""
     try:
         await page.wait_for_function(
             "() => !document.title.includes('Just a moment')",
             timeout=timeout,
         )
+        # After the title changes the post-challenge redirect/reload is still in flight;
+        # give it a moment before we read content.
+        await asyncio.sleep(3)
     except Exception:
-        pass  # if it times out, proceed anyway and let content parsing handle it
-    await page.wait_for_load_state("networkidle", timeout=10000)
+        pass
+    try:
+        await page.wait_for_load_state("networkidle", timeout=20000)
+    except Exception:
+        pass
 
 
 async def discover_listing_urls() -> list[str]:
@@ -103,7 +109,7 @@ async def discover_listing_urls() -> list[str]:
         page = await context.new_page()
 
         # Fetch page 1 to get total count
-        await page.goto(BASE_SEARCH_URL + "1", wait_until="domcontentloaded", timeout=30000)
+        await page.goto(BASE_SEARCH_URL + "1", wait_until="domcontentloaded", timeout=60000)
         await _wait_past_cloudflare(page)
         first_html = await page.content()
         total = _parse_total_count(first_html)
@@ -123,7 +129,7 @@ async def discover_listing_urls() -> list[str]:
 
         for page_num in range(2, total_pages + 1):
             try:
-                await page.goto(BASE_SEARCH_URL + str(page_num), wait_until="domcontentloaded", timeout=30000)
+                await page.goto(BASE_SEARCH_URL + str(page_num), wait_until="domcontentloaded", timeout=60000)
                 await _wait_past_cloudflare(page)
                 html = await page.content()
                 all_links |= _extract_links(html)
@@ -177,7 +183,7 @@ async def _scrape_listing(page, url: str) -> dict | None:
     """Scrape a single listing detail page using an existing Playwright page object."""
     global _debug_dumped
     try:
-        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        await page.goto(url, wait_until="domcontentloaded", timeout=60000)
         await _wait_past_cloudflare(page)
     except Exception as e:
         logger.warning("Failed to load %s: %s", url, e)
