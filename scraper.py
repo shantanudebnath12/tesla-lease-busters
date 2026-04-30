@@ -9,6 +9,7 @@ from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
+from playwright_stealth import stealth_async
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,18 @@ def _parse_total_count(html: str) -> int:
     return 0
 
 
+async def _wait_past_cloudflare(page, timeout: int = 20000) -> None:
+    """Wait until Cloudflare's interstitial is gone and real content is loaded."""
+    try:
+        await page.wait_for_function(
+            "() => !document.title.includes('Just a moment')",
+            timeout=timeout,
+        )
+    except Exception:
+        pass  # if it times out, proceed anyway and let content parsing handle it
+    await page.wait_for_load_state("networkidle", timeout=10000)
+
+
 async def discover_listing_urls() -> list[str]:
     """Phase 1: discover all /details/ URLs using Playwright to bypass bot protection."""
     all_links: set[str] = set()
@@ -73,10 +86,11 @@ async def discover_listing_urls() -> list[str]:
                        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         )
         page = await context.new_page()
+        await stealth_async(page)
 
         # Fetch page 1 to get total count
         await page.goto(BASE_SEARCH_URL + "1", wait_until="domcontentloaded", timeout=30000)
-        await page.wait_for_load_state("networkidle", timeout=15000)
+        await _wait_past_cloudflare(page)
         first_html = await page.content()
         total = _parse_total_count(first_html)
         all_links |= _extract_links(first_html)
@@ -96,7 +110,7 @@ async def discover_listing_urls() -> list[str]:
         for page_num in range(2, total_pages + 1):
             try:
                 await page.goto(BASE_SEARCH_URL + str(page_num), wait_until="domcontentloaded", timeout=30000)
-                await page.wait_for_load_state("networkidle", timeout=15000)
+                await _wait_past_cloudflare(page)
                 html = await page.content()
                 all_links |= _extract_links(html)
             except Exception as e:
@@ -150,7 +164,7 @@ async def _scrape_listing(page, url: str) -> dict | None:
     global _debug_dumped
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        await page.wait_for_load_state("networkidle", timeout=15000)
+        await _wait_past_cloudflare(page)
     except Exception as e:
         logger.warning("Failed to load %s: %s", url, e)
         return None
@@ -256,6 +270,7 @@ async def scrape_listing_details(urls: list[str], existing_ids: set[str]) -> lis
                        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         )
         page = await context.new_page()
+        await stealth_async(page)
 
         for url in new_urls:
             listing = await _scrape_listing(page, url)
