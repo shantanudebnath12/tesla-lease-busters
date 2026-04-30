@@ -9,7 +9,6 @@ from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
-from playwright_stealth import stealth_async
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +25,21 @@ BASE_URL = "https://www.leasebusters.com"
 # Explicit path used when Playwright's auto-detected browser path doesn't exist.
 # Override with CHROMIUM_PATH env var on Railway.
 _CHROMIUM_PATH = os.environ.get("CHROMIUM_PATH", "/opt/pw-browsers/chromium-1194/chrome-linux/chrome")
+
+# Inline stealth patches — replaces playwright-stealth to avoid pkg_resources dependency
+_STEALTH_JS = """
+() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+    Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+    window.chrome = { runtime: {} };
+    const origQuery = window.navigator.permissions.query;
+    window.navigator.permissions.query = (params) =>
+        params.name === 'notifications'
+            ? Promise.resolve({ state: Notification.permission })
+            : origQuery(params);
+}
+"""
 
 
 def _browser_kwargs() -> dict:
@@ -85,8 +99,8 @@ async def discover_listing_urls() -> list[str]:
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         )
+        await context.add_init_script(_STEALTH_JS)
         page = await context.new_page()
-        await stealth_async(page)
 
         # Fetch page 1 to get total count
         await page.goto(BASE_SEARCH_URL + "1", wait_until="domcontentloaded", timeout=30000)
@@ -269,8 +283,8 @@ async def scrape_listing_details(urls: list[str], existing_ids: set[str]) -> lis
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         )
+        await context.add_init_script(_STEALTH_JS)
         page = await context.new_page()
-        await stealth_async(page)
 
         for url in new_urls:
             listing = await _scrape_listing(page, url)
