@@ -176,12 +176,27 @@ def _detect_model(title: str) -> str:
     return "Unknown"
 
 
-_debug_dumped = False
+_MONTH_NAMES = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+
+
+def _months_until(year_str: str, month_str: str, day_str: str) -> int | None:
+    month_num = _MONTH_NAMES.get(month_str[:3].lower())
+    if not month_num:
+        return None
+    try:
+        expiry = datetime(int(year_str), month_num, int(day_str), tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        months = (expiry.year - now.year) * 12 + (expiry.month - now.month)
+        return max(0, months)
+    except ValueError:
+        return None
 
 
 async def _scrape_listing(page, url: str) -> dict | None:
     """Scrape a single listing detail page using an existing Playwright page object."""
-    global _debug_dumped
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=60000)
         await _wait_past_cloudflare(page)
@@ -190,33 +205,32 @@ async def _scrape_listing(page, url: str) -> dict | None:
         return None
 
     content = await page.content()
-
-    if not _debug_dumped:
-        _debug_dumped = True
-        soup_d = BeautifulSoup(content, "html.parser")
-        body = soup_d.body
-        h1s = [t.get_text(strip=True) for t in soup_d.find_all("h1")]
-        dts = [(t.get_text(strip=True), t.find_next_sibling().get_text(strip=True) if t.find_next_sibling() else "") for t in soup_d.find_all("dt")]
-        body_text = body.get_text(" ", strip=True)[:3000] if body else content[:3000]
-        logger.info("DEBUG for %s | h1=%s | dt/dd=%s | body_text=%s", url, h1s, dts[:20], body_text)
-
     soup = BeautifulSoup(content, "html.parser")
+    page_text = soup.get_text(" ", strip=True)
 
-    # Check for expired/taken listings
-    page_text = soup.get_text(" ", strip=True).lower()
-    if any(phrase in page_text for phrase in ["this listing has been taken", "listing expired", "no longer available"]):
+    # Skip expired/taken listings
+    if any(p in page_text.lower() for p in ["this listing has been taken", "listing expired", "no longer available"]):
         logger.info("Skipping expired/taken listing: %s", url)
         return None
 
     listing_id = _extract_listing_id(url)
 
-    # Title — typically an <h1> or prominent heading
+    # Title: try heading elements first, fall back to URL slug
+    # (leasebusters uses h2 or custom classes, not h1)
     title = None
-    for selector in ["h1", ".listing-title", ".vehicle-title"]:
+    for selector in ["h1", "h2", ".listing-title", ".vehicle-title"]:
         el = soup.select_one(selector)
         if el:
-            title = el.get_text(strip=True)
-            break
+            t = el.get_text(strip=True)
+            if len(t) > 5:
+                title = t
+                break
+    if not title:
+        # /details/568628/2024-Tesla-Model Y → "2024 Tesla Model Y"
+        slug = url.split("/details/")[-1]
+        parts = slug.split("/", 1)
+        if len(parts) > 1:
+            title = parts[1].replace("-", " ").replace("+", " ").replace("%20", " ").strip()
     if not title:
         title = "Unknown"
 
@@ -224,41 +238,55 @@ async def _scrape_listing(page, url: str) -> dict | None:
     year = int(year_match.group(1)) if year_match else None
     model = _detect_model(title)
 
-    def find_field_value(labels: list[str]) -> str | None:
-        for label in labels:
-            # Search in dt/dd pairs
-            for dt in soup.find_all("dt"):
-                if label.lower() in dt.get_text(strip=True).lower():
-                    dd = dt.find_next_sibling("dd")
-                    if dd:
-                        return dd.get_text(strip=True)
-            # Search in label/value row patterns
-            for row in soup.find_all(["tr", "li", "div"]):
-                row_text = row.get_text(" ", strip=True)
-                if label.lower() in row_text.lower():
-                    # grab numbers from the same element
-                    nums = re.findall(r"[\$]?\s*[\d,]+(?:\.\d+)?", row_text)
-                    if nums:
-                        return nums[0]
-        return None
+    def rx(pattern: str) -> re.Match | None:
+        return re.search(pattern, page_text, re.IGNORECASE)
 
-    monthly_payment = _parse_float(find_field_value(["monthly payment", "monthly", "payment/month", "$/month"]))
-    months_remaining = _parse_int(find_field_value(["months remaining", "months left", "remaining months"]))
-    km_allowance = _parse_int(find_field_value(["km allowance", "km/year", "annual km", "km per year", "kilometres/year"]))
-    km_used = _parse_int(find_field_value(["km used", "kilometres used", "km driven", "odometer"]))
-    msrp = _parse_float(find_field_value(["msrp", "original msrp", "original price"]))
-    takeover_cash = _parse_float(find_field_value(["takeover cash", "cash incentive", "incentive cash", "cash bonus"])) or 0.0
+    # Monthly payment before taxes (Leasebusters shows both before and after)
+    m = rx(r"Monthly\s+Payment\s*\(before\s+taxes\)\s*\$?\s*([\d,]+(?:\.\d{2})?)")
+    if not m:
+        m = rx(r"Monthly\s+Payment[^$\d\n]{0,30}\$?\s*([\d,]+(?:\.\d{2})?)")
+    monthly_payment = _parse_float(m.group(1)) if m else None
 
-    # Location
-    location = None
-    for selector in [".listing-location", ".location", "[class*='location']"]:
-        el = soup.select_one(selector)
-        if el:
-            location = el.get_text(strip=True)
-            break
-    if not location:
-        loc_match = re.search(r"Location[:\s]+([A-Za-z\s,]+)", soup.get_text(" ", strip=True))
-        location = loc_match.group(1).strip() if loc_match else None
+    # Months remaining: calculated from "Lease Expiry Date 2027-May-07"
+    months_remaining = None
+    m = rx(r"Lease\s+Expiry\s+Date\s+(\d{4})-(\w{3,9})-(\d{1,2})")
+    if m:
+        months_remaining = _months_until(m.group(1), m.group(2), m.group(3))
+
+    # km allowance: "Total km Allowance 60,000" annualized using lease term
+    km_allowance = None
+    m = rx(r"Total\s+km\s+Allowance\s+([\d,]+)")
+    if m:
+        total_km = _parse_int(m.group(1))
+        tm = rx(r"Original\s+Lease\s+Term\s+(\d+)\s+Months")
+        lease_term = _parse_int(tm.group(1)) if tm else None
+        if total_km and lease_term and lease_term > 0:
+            km_allowance = round(total_km / lease_term * 12)
+        else:
+            km_allowance = total_km
+
+    # km used: "Odometer (kms) 82,000"
+    m = rx(r"Odometer\s*\(kms?\)\s*([\d,]+)")
+    km_used = _parse_int(m.group(1)) if m else None
+
+    # MSRP (not always present)
+    m = rx(r"(?:MSRP|Original\s+MSRP|Original\s+Price)\s*\$?\s*([\d,]+(?:\.\d{2})?)")
+    msrp = _parse_float(m.group(1)) if m else None
+
+    # Takeover cash / incentive
+    m = rx(r"(?:Takeover\s+Cash|Cash\s+Incentive|Incentive\s+Cash|Cash\s+Bonus)\s*\$?\s*([\d,]+(?:\.\d{2})?)")
+    takeover_cash = _parse_float(m.group(1)) if m else 0.0
+
+    # Location: "Vehicle Location: Whitby, ON"
+    m = rx(r"Vehicle\s+Location:\s*([A-Za-z][^$\n]{2,40}?)(?=\s+(?:Effective|Listing|Seller|Ask|Year|Odometer))")
+    if not m:
+        m = rx(r"Location[:\s]+([A-Za-z][A-Za-z\s,]{1,30})")
+    location = m.group(1).strip() if m else None
+
+    logger.info(
+        "Parsed %s | payment=%s | months=%s | km_allow=%s | km_used=%s | location=%s",
+        listing_id, monthly_payment, months_remaining, km_allowance, km_used, location,
+    )
 
     return {
         "listing_id": listing_id,
