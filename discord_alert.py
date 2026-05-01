@@ -72,6 +72,9 @@ def send_alert(listing: dict) -> bool:
 
 def should_alert(listing: dict) -> bool:
     payment = listing.get("effective_payment") or listing.get("monthly_payment")
-    if payment is None:
+    if not payment:
         return False
-    return float(payment) <= ALERT_PAYMENT_CEILING
+    try:
+        return float(payment) <= ALERT_PAYMENT_CEILING
+    except (ValueError, TypeError):
+        return False
