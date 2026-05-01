@@ -5,7 +5,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-ALERT_SCORE_THRESHOLD = 7.5
+ALERT_PAYMENT_CEILING = 800.0  # alert when effective (or base) payment is at or below this
 
 
 def _build_message(listing: dict) -> str:
@@ -71,7 +71,7 @@ def send_alert(listing: dict) -> bool:
 
 
 def should_alert(listing: dict) -> bool:
-    score = listing.get("score")
-    if score is None:
+    payment = listing.get("effective_payment") or listing.get("monthly_payment")
+    if payment is None:
         return False
-    return float(score) >= ALERT_SCORE_THRESHOLD
+    return float(payment) <= ALERT_PAYMENT_CEILING
