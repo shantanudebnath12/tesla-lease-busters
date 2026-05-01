@@ -290,8 +290,8 @@ async def _scrape_listing(page, url: str) -> dict | None:
     m = rx(r"(?:MSRP|Original\s+MSRP|Original\s+Price)\s*\$?\s*([\d,]+(?:\.\d{2})?)")
     msrp = _parse_float(m.group(1)) if m else None
 
-    # Takeover cash / incentive
-    m = rx(r"(?:Takeover\s+Cash|Cash\s+Incentive|Incentive\s+Cash|Cash\s+Bonus)\s*\$?\s*([\d,]+(?:\.\d{2})?)")
+    # Takeover cash / incentive — handles "Cash Incentive: $1,000.00" and similar
+    m = rx(r"(?:Takeover\s+Cash|Cash\s+Incentive|Incentive\s+Cash|Cash\s+Bonus)[:\s]*\$?\s*([\d,]+(?:\.\d{2})?)")
     takeover_cash = _parse_float(m.group(1)) if m else 0.0
 
     # Location: "Vehicle Location: Whitby, ON"
