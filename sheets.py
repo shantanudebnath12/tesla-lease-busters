@@ -82,6 +82,19 @@ class SheetsClient:
             logger.warning("Could not fetch unalerted IDs: %s", e)
             return set()
 
+    def get_unalerted_listings(self) -> list[dict]:
+        """Return full records for all listings not yet alerted."""
+        try:
+            records = self._listings_ws.get_all_records()
+            return [
+                r for r in records
+                if r.get("listing_id")
+                and str(r.get("alerted", "")).upper() not in ("TRUE", "1", "YES")
+            ]
+        except Exception as e:
+            logger.warning("Could not fetch unalerted listings: %s", e)
+            return []
+
     def append_listings(self, listings: list[dict]) -> int:
         """Append new listings (with score fields) to the sheet. Returns count appended."""
         if not listings:

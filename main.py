@@ -72,15 +72,13 @@ async def run() -> None:
         errors.append(str(e))
         new_count = 0
 
-    # Step 6 — send Discord alerts for high-score listings
+    # Step 6 — send Discord alerts for all qualifying unalerted listings in the sheet
+    # (not just newly scraped ones — catches existing listings on threshold changes)
     alerts_sent = 0
-    unalerted_ids = sheets.get_unalerted_ids()
-    for listing in scored_listings:
-        lid = str(listing.get("listing_id", ""))
-        if lid not in unalerted_ids:
-            continue
+    for listing in sheets.get_unalerted_listings():
         if not should_alert(listing):
             continue
+        lid = str(listing.get("listing_id", ""))
         success = send_alert(listing)
         if success:
             sheets.mark_alerted(lid)
